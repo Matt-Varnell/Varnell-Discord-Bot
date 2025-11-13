@@ -5,36 +5,30 @@ import requests
 import json
 from io import BytesIO
 import time
-import asyncio  # ✅ Needed for async timeout
 from discord.ext.commands import CommandOnCooldown
-import discord.opus
 
-# Load Opus library for voice support
-if not discord.opus.is_loaded():
-    discord.opus.load_opus("libopus.so")
-
-# Initialize bot
+# Initialize bot with command prefix and intents
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# Google Drive Setup
+# Google Drive API setup
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_DRIVE_FOLDER_ID = "146vaztLHzvMf5Ng5Er8t0ce_Inzw2TH4"
 
-# Command rate-limiting
-cooldowns = commands.CooldownMapping.from_cooldown(3, 60.0, commands.BucketType.user)
+# Rate limiting to prevent API bans
+cooldowns = commands.CooldownMapping.from_cooldown(3, 60.0, commands.BucketType.user)  # 3 commands per minute
 
-# Cache for Drive file listing
-CACHE_EXPIRATION = 300
+# Caching system to reduce API calls
+CACHE_EXPIRATION = 300  # Cache for 5 minutes
 file_cache = {
     "files": [],
     "timestamp": 0
 }
 
 def get_drive_files():
-    """Fetch and cache Google Drive MP3 file list."""
+    """Fetches the list of MP3 files from the Google Drive folder and caches it."""
     current_time = time.time()
     if current_time - file_cache["timestamp"] < CACHE_EXPIRATION:
         print("Using cached file list.")
@@ -58,18 +52,16 @@ async def on_ready():
 
 @bot.command()
 async def join(ctx):
-    """Joins the voice channel of the user."""
+    """Joins the voice channel the user is in."""
     if ctx.author.voice:
-        try:
-            await ctx.author.voice.channel.connect(timeout=10)
-        except asyncio.TimeoutError:
-            await ctx.send("Failed to connect to the voice channel in time.")
+        channel = ctx.author.voice.channel
+        await channel.connect()
     else:
         await ctx.send("You need to be in a voice channel first!")
 
 @bot.command()
 async def list(ctx):
-    """Lists available MP3 files in the Drive folder with cooldown."""
+    """Lists available MP3 files in the Google Drive folder with rate limit protection."""
     bucket = cooldowns.get_bucket(ctx.message)
     retry_after = bucket.update_rate_limit()
     if retry_after:
@@ -85,36 +77,26 @@ async def list(ctx):
 
 @bot.command()
 async def play(ctx, *, filename: str):
-    """Plays an MP3 file from Google Drive."""
-    # Normalize filename
-    normalized_filename = filename.replace("_", " ").strip(' "\'').lower()
-    print(f"User requested: {normalized_filename}")
+    """Plays an MP3 file from Google Drive, allowing underscores instead of spaces."""
+    if not ctx.voice_client:
+        await ctx.invoke(join)
+
+    vc = ctx.voice_client
+
+    if vc.is_playing():
+        vc.stop()
 
     files = get_drive_files()
+    normalized_filename = filename.replace("_", " ").strip(' "\'').lower()
+    print(f"User requested: {normalized_filename}")
     print("Available files:", [f["name"].lower() for f in files])
+
     file_data = next((f for f in files if f["name"].lower() == normalized_filename), None)
 
     if not file_data:
         await ctx.send("File not found! Use `!list` to see available files.")
         return
 
-    # Connect to voice if not already
-    if not ctx.voice_client:
-        if ctx.author.voice:
-            try:
-                await ctx.author.voice.channel.connect(timeout=10)
-            except asyncio.TimeoutError:
-                await ctx.send("Failed to connect to the voice channel in time.")
-                return
-        else:
-            await ctx.send("You need to be in a voice channel first!")
-            return
-
-    vc = ctx.voice_client
-    if vc.is_playing():
-        vc.stop()
-
-    # Download audio file from Drive
     file_id = file_data["id"]
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
@@ -126,26 +108,21 @@ async def play(ctx, *, filename: str):
         await ctx.send(f"Error downloading file: {e}")
         return
 
-    try:
-        vc.play(discord.FFmpegPCMAudio(audio_data, pipe=True, executable="ffmpeg"),
-                after=lambda e: print(f"Finished playing {file_data['name']}"))
-        await ctx.send(f"Now playing: {file_data['name']}")
-    except discord.ClientException as e:
-        await ctx.send("Something went wrong playing the audio.")
-        print("Audio error:", e)
+    vc.play(discord.FFmpegPCMAudio(audio_data, pipe=True, executable="ffmpeg"), after=lambda e: print(f"Finished playing {file_data['name']}"))
+    await ctx.send(f"Now playing: {file_data['name']}")
 
 @bot.command()
 async def leave(ctx):
-    """Leaves the voice channel."""
+    """Disconnects bot from voice channel."""
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
         await ctx.send("Bot has left the voice channel.")
     else:
         await ctx.send("I'm not in a voice channel.")
 
-# Start bot using secret token
+# Load bot token from environment variables
 token = os.getenv("TOKEN")
 if not token:
-    raise Exception("Please add your TOKEN to the Replit Secrets pane.")
+    raise Exception("Please add your token to the environment variables.")
 
 bot.run(token)
