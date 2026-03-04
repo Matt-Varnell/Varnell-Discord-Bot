@@ -6,6 +6,9 @@ import json
 from io import BytesIO
 import time
 from discord.ext.commands import CommandOnCooldown
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Initialize bot with command prefix and intents
 intents = discord.Intents.default()
