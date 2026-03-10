@@ -45,20 +45,6 @@ if not logger.handlers:
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
 
-# Playback mode switch for A/B testing on Raspberry Pi.
-# Use "pcm" for FFmpegPCMAudio, or "opus" for FFmpegOpusAudio.
-PLAYBACK_MODE = os.getenv("PLAYBACK_MODE", "pcm").strip().lower()
-if PLAYBACK_MODE not in {"pcm", "opus"}:
-    logger.warning("playback.mode invalid=%s fallback=pcm", PLAYBACK_MODE)
-    PLAYBACK_MODE = "pcm"
-
-PROCESS = psutil.Process(os.getpid()) if psutil else None
-if psutil:
-    psutil.cpu_percent(interval=None)
-    if PROCESS:
-        PROCESS.cpu_percent(interval=None)
-else:
-    logger.warning("psutil missing: system cpu/memory diagnostics will be skipped")
 
 # Initialize bot with command prefix and intents
 intents = discord.Intents.default()
@@ -85,7 +71,7 @@ file_cache = {"files": [], "timestamp": 0}
 playback_state = {
     "local_path": None,
     "display_name": None,
-    "mode": PLAYBACK_MODE,
+
     "ffmpeg_pid": None,
     "ffmpeg_args": None,
     "ffmpeg_stderr_path": None,
@@ -161,7 +147,7 @@ def download_file_to_path(url: str, destination: Path) -> int:
 
 
 async def voice_diagnostics_loop(ctx: commands.Context):
-    """Periodic voice + host metrics to help isolate latency/CPU/memory issues."""
+
     try:
         while True:
             await asyncio.sleep(5)
@@ -170,13 +156,6 @@ async def voice_diagnostics_loop(ctx: commands.Context):
                 logger.info("voice.diag stopped reason=no_voice_client")
                 return
 
-            py_cpu = PROCESS.cpu_percent(interval=None) if PROCESS else None
-            sys_cpu = psutil.cpu_percent(interval=None) if psutil else None
-            mem_pct = psutil.virtual_memory().percent if psutil else None
-
-            logger.info(
-                "voice.diag mode=%s connected=%s playing=%s paused=%s latency_ms=%.1f avg_latency_ms=%.1f channel=%s ffmpeg_pid=%s py_cpu_pct=%s sys_cpu_pct=%s mem_pct=%s",
-                playback_state.get("mode"),
                 vc.is_connected(),
                 vc.is_playing(),
                 vc.is_paused(),
@@ -184,10 +163,6 @@ async def voice_diagnostics_loop(ctx: commands.Context):
                 (vc.average_latency or 0.0) * 1000,
                 getattr(vc.channel, "name", None),
                 playback_state.get("ffmpeg_pid"),
-                f"{py_cpu:.1f}" if py_cpu is not None else "n/a",
-                f"{sys_cpu:.1f}" if sys_cpu is not None else "n/a",
-                f"{mem_pct:.1f}" if mem_pct is not None else "n/a",
-            )
 
             # Watchdog: playback expected but no longer active.
             if playback_state.get("local_path") and not vc.is_playing() and not vc.is_paused():
@@ -213,29 +188,18 @@ def _capture_ffmpeg_process_info(source: discord.AudioSource):
 
 
 async def _build_audio_source(local_path: Path, stderr_log_path: Path) -> discord.AudioSource:
-    """Create FFmpeg source based on PLAYBACK_MODE for easy A/B testing."""
+
     stderr_handle = open(stderr_log_path, "ab")
     playback_state["ffmpeg_stderr_handle"] = stderr_handle
     playback_state["ffmpeg_stderr_path"] = str(stderr_log_path)
 
     before_options = "-nostdin -hide_banner"
-    base_options = "-vn -loglevel warning"
 
-    # Keep Opus settings conservative on Pi to avoid over-aggressive encode parameters.
-    if PLAYBACK_MODE == "opus":
-        options = f"{base_options} -c:a libopus -b:a 96k"
-        playback_state["ffmpeg_args"] = f"before_options={before_options} options={options}"
-        source = discord.FFmpegOpusAudio(
-            str(local_path),
             stderr=stderr_handle,
             before_options=before_options,
             options=options,
         )
-        logger.info("ffmpeg.source created=FFmpegOpusAudio mode=opus path=%s options=%s", local_path, options)
-        return source
 
-    options = base_options
-    playback_state["ffmpeg_args"] = f"before_options={before_options} options={options}"
     source = discord.FFmpegPCMAudio(
         str(local_path),
         executable="ffmpeg",
@@ -243,7 +207,7 @@ async def _build_audio_source(local_path: Path, stderr_log_path: Path) -> discor
         before_options=before_options,
         options=options,
     )
-    logger.info("ffmpeg.source created=FFmpegPCMAudio mode=pcm path=%s options=%s", local_path, options)
+
     return source
 
 
@@ -271,7 +235,7 @@ async def safe_cleanup(path: Optional[Path]):
         {
             "local_path": None,
             "display_name": None,
-            "mode": PLAYBACK_MODE,
+
             "ffmpeg_pid": None,
             "ffmpeg_args": None,
             "ffmpeg_stderr_handle": None,
@@ -282,7 +246,7 @@ async def safe_cleanup(path: Optional[Path]):
 
 @bot.event
 async def on_ready():
-    logger.info("bot.startup user=%s playback_mode=%s", bot.user, PLAYBACK_MODE)
+
 
 
 @bot.event
@@ -359,7 +323,7 @@ async def voiceinfo(ctx):
         f"Paused: {vc.is_paused()}\n"
         f"Latency: {(vc.latency or 0.0) * 1000:.1f} ms\n"
         f"Average latency: {(vc.average_latency or 0.0) * 1000:.1f} ms\n"
-        f"Playback mode: {playback_state.get('mode')}\n"
+
         f"Local file: {playback_state.get('local_path')}\n"
         f"FFmpeg PID: {playback_state.get('ffmpeg_pid')}"
     )
@@ -413,7 +377,7 @@ async def play(ctx, *, filename: str):
         {
             "local_path": str(temp_audio_path),
             "display_name": file_data["name"],
-            "mode": PLAYBACK_MODE,
+
             "ffmpeg_pid": None,
             "ffmpeg_args": None,
             "cleanup_started": False,
@@ -434,7 +398,7 @@ async def play(ctx, *, filename: str):
         _capture_ffmpeg_process_info(audio_source)
 
         def after_playback(error):
-            logger.info("playback.after_callback file=%s mode=%s error=%s", file_data["name"], PLAYBACK_MODE, error)
+
             if error:
                 logger.exception("playback.after_error file=%s", file_data["name"], exc_info=error)
 
@@ -448,12 +412,7 @@ async def play(ctx, *, filename: str):
         playback_state["diag_task"] = asyncio.create_task(voice_diagnostics_loop(ctx))
 
         total_to_start = time.monotonic() - playback_state["command_start_monotonic"]
-        logger.info(
-            "playback.start file=%s mode=%s command_to_start_seconds=%.3f",
-            file_data["name"],
-            PLAYBACK_MODE,
-            total_to_start,
-        )
+
         await ctx.send(f"Now playing: {file_data['name']}")
 
     except requests.exceptions.RequestException as e:
